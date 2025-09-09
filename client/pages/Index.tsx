@@ -2,22 +2,25 @@ import { Buffer } from "buffer";
 import { useEffect, useMemo, useRef, useState } from "react";
 import showcaseData from "@/data/showcase.json";
 
-import { GoogleGenAI } from "@google/genai";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   CardDescription,
-  CardFooter,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+
+import Sidebar from "@/components/layout/Sidebar";
+import ApiKeyInput from "@/components/api/ApiKeyInput";
+import ImageUpload from "@/components/image/ImageUpload";
+import PromptInput from "@/components/prompt/PromptInput";
+import ResultDisplay from "@/components/result/ResultDisplay";
+import Showcase from "@/components/showcase/Showcase";
+import apiService from "@/services/api";
 
 interface LocalImage {
   file: File;
@@ -47,24 +50,6 @@ function useLocalStorage(key: string, initial: string = "") {
   return [value, setValue] as const;
 }
 
-async function fileToImageInfo(file: File): Promise<LocalImage> {
-  const url = URL.createObjectURL(file);
-  try {
-    const dims = await new Promise<{ width: number; height: number }>(
-      (resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve({ width: img.width, height: img.height });
-        img.onerror = () => reject(new Error("Failed to load image"));
-        img.src = url;
-      },
-    );
-    return { file, previewUrl: url, width: dims.width, height: dims.height };
-  } catch (e) {
-    URL.revokeObjectURL(url);
-    throw e;
-  }
-}
-
 async function resizeToMax(
   file: File,
 ): Promise<{ mimeType: string; data: string }> {
@@ -90,76 +75,6 @@ async function resizeToMax(
   return { mimeType, data: base64 };
 }
 
-function Sidebar({
-  mode,
-  setMode,
-}: {
-  mode: "image" | "text";
-  setMode: (m: "image" | "text") => void;
-}) {
-  return (
-    <aside className="hidden md:flex md:flex-col w-64 shrink-0 border-r bg-sidebar p-6 gap-4">
-      <div className="flex items-center gap-2">
-        <div className="h-9 w-9 rounded-md bg-primary/20 grid place-items-center">
-          <span className="text-xl">🍌</span>
-        </div>
-        <div>
-          <div className="font-extrabold tracking-tight text-lg">
-            Open Nano Pisang
-          </div>
-          <div className="text-xs text-muted-foreground">
-            Open-source image demo
-          </div>
-        </div>
-      </div>
-      <Separator />
-      <nav className="flex flex-col gap-2">
-        <Button
-          variant={mode === "image" ? "secondary" : "ghost"}
-          className="justify-start"
-          onClick={() => setMode("image")}
-        >
-          Image
-        </Button>
-        <Button
-          variant={mode === "text" ? "secondary" : "ghost"}
-          className="justify-start"
-          onClick={() => setMode("text")}
-        >
-          Text-to-Image
-        </Button>
-      </nav>
-      <div className="mt-auto pt-2">
-        <a
-          href="https://github.com/mfatihrabbani/open-nano-pisang"
-          target="_blank"
-          rel="noreferrer"
-          className="text-sm text-primary hover:underline"
-        >
-          GitHub ↗
-        </a>
-      </div>
-    </aside>
-  );
-}
-
-function ModelInput({
-  model,
-  setModel,
-}: {
-  model: string;
-  setModel: (v: string) => void;
-}) {
-  return (
-    <Input
-      type="text"
-      placeholder="Model (e.g. gemini-2.0-flash-exp)"
-      value={model}
-      onChange={(e) => setModel(e.target.value)}
-    />
-  );
-}
-
 export default function Index() {
   const [apiKey, setApiKey] = useLocalStorage("bw_api_key", "");
   const [prompt, setPrompt] = useState("");
@@ -168,7 +83,6 @@ export default function Index() {
   const [resultUrls, setResultUrls] = useState<string[] | null>(null);
   const [model, setModel] = useState<string>("gemini-2.5-flash-image-preview");
   const [mode, setMode] = useState<"image" | "text">("image");
-  const dropRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const [allowShowcaseScroll, setAllowShowcaseScroll] = useState(false);
   // Ganti state loadingProgress dengan loadingTime
@@ -190,28 +104,6 @@ export default function Index() {
   }, [isLoading]);
 
   const [loadingProgress, setLoadingProgress] = useState(0);
-
-  useEffect(() => {
-    const el = dropRef.current;
-    if (!el) return;
-    const prevent = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    const onDrop = (e: DragEvent) => {
-      prevent(e);
-      const dt = e.dataTransfer;
-      if (!dt) return;
-      const files = Array.from(dt.files);
-      handleFiles(files);
-    };
-    el.addEventListener("dragover", prevent);
-    el.addEventListener("drop", onDrop);
-    return () => {
-      el.removeEventListener("dragover", prevent);
-      el.removeEventListener("drop", onDrop);
-    };
-  }, []);
 
   useEffect(() => {
     const el = mainRef.current;
@@ -236,36 +128,8 @@ export default function Index() {
     [apiKey, prompt, images, isLoading, mode],
   );
 
-  async function handleFiles(files: File[]) {
-    const imgs: LocalImage[] = [];
-    for (const f of files) {
-      if (!f.type.startsWith("image/")) continue;
-      if (f.size > MAX_SIZE) {
-        toast.error(`${f.name} exceeds 8MB limit`);
-        continue;
-      }
-      try {
-        const info = await fileToImageInfo(f);
-        if (Math.max(info.width, info.height) > MAX_DIM * 2) {
-          toast.message(
-            `${f.name} is very large, will be downscaled on upload`,
-          );
-        }
-        imgs.push(info);
-      } catch {
-        toast.error(`Failed to read ${f.name}`);
-      }
-    }
-    const merged = [...images, ...imgs].slice(0, MAX_FILES);
-    if (merged.length === 0) {
-      toast.error("Please add 1–5 image files");
-    }
-    setImages(merged);
-  }
-
   async function onGenerate() {
     try {
-      const ai = new GoogleGenAI({ apiKey: apiKey });
       setIsLoading(true);
       setResultUrls(null);
 
@@ -273,33 +137,26 @@ export default function Index() {
         images.map(async (i) => {
           const resized = await resizeToMax(i.file);
           return {
-            inlineData: {
-              mimeType: resized.mimeType,
-              data: resized.data,
-            },
+            mimeType: resized.mimeType,
+            data: resized.data,
           };
         }),
       );
 
-      const newPrompt = [{ text: prompt }, ...imageParts];
-
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-image-preview",
-        contents: newPrompt,
-      });
+      const response = await apiService.editImages(
+        apiKey,
+        prompt,
+        imageParts,
+        model,
+      );
 
       const newResultUrls: string[] = [];
-      for (const candidate of response.candidates[0].content.parts) {
-        if (candidate.inlineData) {
-          const blob = new Blob(
-            [Buffer.from(candidate.inlineData.data, "base64")],
-            {
-              type: candidate.inlineData.mimeType,
-            },
-          );
-          const url = URL.createObjectURL(blob);
-          newResultUrls.push(url);
-        }
+      for (const image of response.images) {
+        const blob = new Blob([Buffer.from(image.data, "base64")], {
+          type: image.mimeType,
+        });
+        const url = URL.createObjectURL(blob);
+        newResultUrls.push(url);
       }
       setResultUrls(newResultUrls);
       toast.success("Generated image ready");
@@ -314,60 +171,6 @@ export default function Index() {
     setPrompt("");
     setImages([]);
     setResultUrls(null);
-  }
-
-  function applyPreset(type: "removebg" | "cyberpunk" | "portrait") {
-    const map = {
-      removebg:
-        "Remove background, clean subject cutout, smooth edges, high-quality alpha",
-      cyberpunk:
-        "Cyberpunk neon lights, rainy city reflections, dramatic rim light, high contrast",
-      portrait:
-        "Studio portrait, soft key light, 85mm lens look, shallow depth of field",
-    } as const;
-    const extra = map[type];
-    setPrompt((p) => (p ? `${p}\n\n${extra}` : extra));
-  }
-
-  async function useExampleItem(item: {
-    image: string;
-    prompt: string;
-    image_ingredients?: string[];
-  }) {
-    try {
-      const imagesToLoad = item.image_ingredients || [item.image];
-      const loadedImages: LocalImage[] = [];
-
-      for (const imgUrl of imagesToLoad) {
-        const r = await fetch(imgUrl);
-        const b = await r.blob();
-        const file = new File([b], imgUrl.split("/").pop() || "example.png", {
-          type: b.type || "image/png",
-        });
-        const info = await fileToImageInfo(file);
-        loadedImages.push(info);
-      }
-
-      if (mode === "image") {
-        setImages(loadedImages);
-      } else {
-        setImages([]);
-      }
-      setPrompt(item.prompt);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    } catch (e: any) {
-      console.error(e);
-      toast.error("Failed to load example");
-    }
-  }
-
-  async function copy(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success("Prompt copied");
-    } catch {
-      toast.error("Copy failed");
-    }
   }
 
   return (
@@ -405,23 +208,13 @@ export default function Index() {
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 min-h-0 overflow-y-auto">
             <div className="xl:col-span-2 space-y-6">
               <Card>
-                <CardHeader>
-                  <CardTitle>API key</CardTitle>
-                  <CardDescription>
-                    Stored locally in your browser
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-3 md:flex-row">
-                  <Input
-                    type="password"
-                    placeholder="Enter your Gemini API key"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
+                <CardContent className="pt-6">
+                  <ApiKeyInput
+                    apiKey={apiKey}
+                    setApiKey={setApiKey}
+                    model={model}
+                    setModel={setModel}
                   />
-                  <ModelInput model={model} setModel={setModel} />
-                  <Button variant="outline" onClick={() => setApiKey("")}>
-                    Clear
-                  </Button>
                 </CardContent>
               </Card>
 
@@ -434,218 +227,46 @@ export default function Index() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div
-                      ref={dropRef}
-                      className={cn(
-                        "flex flex-col items-center justify-center gap-3 border-2 border-dashed rounded-lg p-8 text-center",
-                        "bg-accent/30 hover:bg-accent/50 transition-colors",
-                      )}
-                    >
-                      <div className="text-sm text-muted-foreground">
-                        Drag & drop images here or
-                      </div>
-                      <label className="inline-flex items-center gap-2">
-                        <Input
-                          id="file-upload"
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          className="hidden"
-                          onChange={(e) => {
-                            const f = e.target.files
-                              ? Array.from(e.target.files)
-                              : [];
-                            handleFiles(f);
-                            e.currentTarget.value = "";
-                          }}
-                        />
-                        <Button asChild>
-                          <label htmlFor="file-upload">Browse</label>
-                        </Button>
-                      </label>
-                      <div className="text-xs text-muted-foreground">
-                        {images.length}/{MAX_FILES} selected
-                      </div>
-                    </div>
-                    {images.length > 0 && (
-                      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-                        {images.map((img, i) => (
-                          <div key={i} className="relative group">
-                            <img
-                              src={img.previewUrl}
-                              alt={`upload-${i}`}
-                              className="w-full h-28 object-cover rounded-md border"
-                            />
-                            <button
-                              className="absolute top-2 right-2 text-xs px-2 py-1 rounded bg-background/80 border shadow opacity-0 group-hover:opacity-100 transition"
-                              onClick={() =>
-                                setImages((arr) =>
-                                  arr.filter((_, idx) => idx !== i),
-                                )
-                              }
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <ImageUpload images={images} setImages={setImages} />
                   </CardContent>
                 </Card>
               )}
 
               <Card>
-                <CardHeader>
-                  <CardTitle>Prompt</CardTitle>
-                  <CardDescription>
-                    Describe your edit intent or style
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Textarea
-                    placeholder="e.g. Clean product cutout with slight drop shadow"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    rows={6}
+                <CardContent className="pt-6">
+                  <PromptInput
+                    prompt={prompt}
+                    setPrompt={setPrompt}
+                    mode={mode}
+                    onGenerate={onGenerate}
+                    onReset={onReset}
+                    canGenerate={canGenerate}
+                    isLoading={isLoading}
                   />
-                  <div className="flex flex-wrap gap-2 mt-3">
-                    {mode === "image" && (
-                      <Button
-                        variant="outline"
-                        onClick={() => applyPreset("removebg")}
-                      >
-                        Remove BG
-                      </Button>
-                    )}
-                    <Button
-                      variant="outline"
-                      onClick={() => applyPreset("cyberpunk")}
-                    >
-                      Cyberpunk
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => applyPreset("portrait")}
-                    >
-                      Studio Portrait
-                    </Button>
-                  </div>
                 </CardContent>
-                <CardFooter className="flex items-center gap-3">
-                  <Button disabled={!canGenerate} onClick={onGenerate}>
-                    {isLoading ? "Generating..." : "Generate"}
-                  </Button>
-                  <Button variant="ghost" onClick={onReset}>
-                    Reset
-                  </Button>
-                </CardFooter>
               </Card>
 
               <Card>
-                <CardHeader>
-                  <CardTitle>Result</CardTitle>
-                  <CardDescription>Preview and download</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {resultUrls && resultUrls.length > 0 ? (
-                    <div className="space-y-3">
-                      {resultUrls.map((url, index) => (
-                        <img
-                          key={index}
-                          src={url}
-                          alt={`result-${index}`}
-                          className="w-full max-h-[480px] object-contain rounded-md border"
-                        />
-                      ))}
-                      <div className="flex gap-2">
-                        {resultUrls.map((url, index) => (
-                          <Button asChild key={index}>
-                            <a
-                              href={url}
-                              download={`banana-wrapper-result-${index}.png`}
-                            >
-                              Download {index + 1}
-                            </a>
-                          </Button>
-                        ))}
-                        <Button
-                          variant="outline"
-                          onClick={() => setResultUrls(null)}
-                        >
-                          Clear
-                        </Button>
-                      </div>
-                    </div>
-                  ) : isLoading ? (
-                    <div className="space-y-4 animate-pulse">
-                      <div className="h-[320px] bg-muted rounded-md flex items-center justify-center">
-                        <div className="text-sm text-muted-foreground flex flex-col items-center gap-2">
-                          <div className="loading-spinner h-6 w-6 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                          <div>Generating... {Math.floor(loadingTime)}s</div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-sm text-muted-foreground">
-                      No result yet
-                    </div>
-                  )}
+                <CardContent className="pt-6">
+                  <ResultDisplay
+                    resultUrls={resultUrls}
+                    isLoading={isLoading}
+                    loadingTime={loadingTime}
+                    onClear={() => setResultUrls(null)}
+                  />
                 </CardContent>
               </Card>
             </div>
 
             <div className="xl:col-span-1 flex flex-col min-h-0">
               <Card className="h-full flex flex-col">
-                <CardHeader>
-                  <CardTitle>Showcase</CardTitle>
-                  <CardDescription>
-                    Use an example or copy its prompt
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="grid gap-4 flex-1 pr-2 overflow-y-auto">
-                  {(mode === "image"
-                    ? (showcaseData as any).image
-                    : (showcaseData as any).text
-                  ).map((item: any, idx: number) => (
-                    <div
-                      key={idx}
-                      className="rounded-lg border overflow-hidden"
-                    >
-                      <img
-                        src={item.image}
-                        alt={item.title}
-                        className="w-full h-40 object-cover"
-                      />
-                      <div className="p-4 space-y-2">
-                        <div className="font-medium">{item.title}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {item.description}
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {item.tags.map((t, i) => (
-                            <Badge key={i} variant="secondary">
-                              {t}
-                            </Badge>
-                          ))}
-                        </div>
-                        <div className="flex gap-2 pt-2">
-                          <Button
-                            size="sm"
-                            onClick={() => useExampleItem(item)}
-                          >
-                            Use this template
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => copy(item.prompt)}
-                          >
-                            Copy prompt
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                <CardContent className="pt-6 flex-1">
+                  <Showcase
+                    mode={mode}
+                    showcaseData={showcaseData as any}
+                    setImages={setImages}
+                    setPrompt={setPrompt}
+                  />
                 </CardContent>
               </Card>
             </div>

@@ -35,12 +35,14 @@ class ApiService {
         body: JSON.stringify(requestBody),
       });
 
+      console.log("Response:", response);
+
       if (!response.ok) {
         const errorData: EditErrorResponse = await response.json();
         throw new Error(errorData.error || "Failed to edit images");
       }
 
-      const data: EditSuccessResponse = await response.json();
+      const data = await response.json();
       return data;
     } catch (error) {
       console.error("Error editing images:", error);
